@@ -51,46 +51,54 @@ send_data(struct neopixel_s *n, uint8_t *data, uint_fast8_t data_len)
         uint_fast8_t bits = 8;
         while (bits--) {
             // Calculate pulse duration
-            uint32_t on, off;
-            if (byte & 0x80) {
+            uint32_t on;
+            if (byte & 0x80)
                 on = timer_from_ns(700 - 150);
-                off = timer_from_ns(600 - 150);
-            } else {
+            else
                 on = timer_from_ns(350 - 150);
-                off = timer_from_ns(800 - 150);
-            }
-            byte <<= 1;
 
             // Set output high
             do {
                 irq_poll();
                 cur = timer_read_time();
             } while (timer_is_before(cur, min_wait_time));
+            uint32_t off_end_time = cur;
             gpio_out_write(pin, 1);
             uint32_t on_start_time = timer_read_time();
-            if (timer_is_before(max_wait_time, on_start_time))
-                goto fail;
             min_wait_time = on_start_time + on;
-            max_wait_time = cur + on + timer_from_ns(300);
 
             // Set output low
             do {
                 irq_poll();
                 cur = timer_read_time();
             } while (timer_is_before(cur, min_wait_time));
+            uint32_t on_end_time = cur;
             gpio_out_write(pin, 0);
             uint32_t off_start_time = timer_read_time();
-            if (timer_is_before(max_wait_time, off_start_time))
+            min_wait_time = on_start_time + timer_from_ns(1250);
+
+            // Check for faults
+            if (byte & 0x80) {
+                // Make sure off for at least 200ns
+                uint32_t min_off = off_start_time + timer_from_ns(200);
+                if (timer_is_before(min_wait_time, min_off))
+                    min_wait_time = min_off;
+            } else {
+                // Make sure short on duration was no more than 500ns
+                uint32_t max_off = off_end_time + timer_from_ns(500);
+                if (timer_is_before(max_off, off_start_time))
+                    goto fail;
+            }
+            byte <<= 1;
+            if (timer_is_before(max_wait_time, on_start_time))
                 goto fail;
-            min_wait_time = off_start_time + off;
-            max_wait_time = cur + off + timer_from_ns(300);
+            max_wait_time = on_end_time + timer_from_us(4);
         }
     }
     n->last_req_time = timer_read_time();
     return 0;
 fail:
     // A hardware irq messed up the transmission - report a failure
-    gpio_out_write(pin, 0);
     n->last_req_time = timer_read_time();
     return -1;
 }
